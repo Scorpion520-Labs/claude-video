@@ -32,9 +32,70 @@ GROQ_MODEL = "whisper-large-v3"
 OPENAI_ENDPOINT = "https://api.openai.com/v1/audio/transcriptions"
 OPENAI_MODEL = "whisper-1"
 
+# A local / self-hosted OpenAI-compatible endpoint (omlx, whisper.cpp server,
+# speaches, …). When WHISPER_BASE_URL is set we prefer it over the paid APIs:
+# same multipart /audio/transcriptions protocol, just a different base URL and
+# model — so you can transcribe fully offline for $0.
+LOCAL_MODEL_DEFAULT = "whisper-large-v3-turbo"
+
 # Both Groq's free tier and OpenAI whisper-1 cap uploads at 25 MB. We target a
 # margin under that so multipart framing overhead never pushes a chunk over.
 MAX_UPLOAD_BYTES = 24 * 1024 * 1024
+
+_DOTENV_PATHS = [
+    Path.home() / ".config" / "watch" / ".env",
+    Path.cwd() / ".env",
+]
+
+
+def _dotenv_get(path: Path, name: str) -> str | None:
+    """Read a single KEY=value from a dotenv file, honoring surrounding quotes."""
+    if not path.exists():
+        return None
+    try:
+        for line in path.read_text(encoding="utf-8").splitlines():
+            line = line.strip()
+            if not line or line.startswith("#") or "=" not in line:
+                continue
+            key, _, value = line.partition("=")
+            if key.strip() != name:
+                continue
+            value = value.strip()
+            if len(value) >= 2 and value[0] in ('"', "'") and value[-1] == value[0]:
+                value = value[1:-1]
+            return value or None
+    except OSError:
+        return None
+    return None
+
+
+def _config_value(name: str) -> str | None:
+    """Resolve a config value from the environment, then the dotenv files."""
+    value = os.environ.get(name)
+    if value and value.strip():
+        return value.strip()
+    for path in _DOTENV_PATHS:
+        value = _dotenv_get(path, name)
+        if value:
+            return value
+    return None
+
+
+def _local_base_url() -> str | None:
+    return _config_value("WHISPER_BASE_URL")
+
+
+def resolve_endpoint(backend: str) -> tuple[str, str]:
+    """Return (endpoint_url, model) for a resolved backend name."""
+    if backend == "local":
+        base = (_local_base_url() or "").rstrip("/")
+        model = _config_value("WHISPER_MODEL") or LOCAL_MODEL_DEFAULT
+        return f"{base}/audio/transcriptions", model
+    if backend == "groq":
+        return GROQ_ENDPOINT, GROQ_MODEL
+    if backend == "openai":
+        return OPENAI_ENDPOINT, OPENAI_MODEL
+    raise SystemExit(f"Unknown whisper backend: {backend}")
 
 
 def plan_chunks(
@@ -90,10 +151,19 @@ def load_api_key(preferred: str | None = None) -> tuple[str, str] | tuple[None, 
             return None
         return None
 
-    dotenv_paths = [
-        Path.home() / ".config" / "watch" / ".env",
-        Path.cwd() / ".env",
-    ]
+    dotenv_paths = _DOTENV_PATHS
+
+    # Prefer a local / self-hosted endpoint when one is configured, unless the
+    # caller explicitly forced groq/openai. omlx and friends require their own
+    # key; fall back to reusing an OpenAI/Groq key if WHISPER_API_KEY is unset.
+    if preferred in (None, "local") and _local_base_url():
+        local_key = (
+            _config_value("WHISPER_API_KEY")
+            or _config_value("OPENAI_API_KEY")
+            or _config_value("GROQ_API_KEY")
+            or ""
+        )
+        return "local", local_key
 
     candidates = (("GROQ_API_KEY", "groq"), ("OPENAI_API_KEY", "openai"))
     if preferred is not None:
@@ -402,12 +472,8 @@ def transcribe_chunks(
 
 def _transcribe_file(backend: str, api_key: str, audio_path: Path) -> list[dict]:
     """Upload one audio file and return its 0-based segments."""
-    if backend == "groq":
-        response = _post_whisper(GROQ_ENDPOINT, api_key, GROQ_MODEL, audio_path)
-    elif backend == "openai":
-        response = _post_whisper(OPENAI_ENDPOINT, api_key, OPENAI_MODEL, audio_path)
-    else:
-        raise SystemExit(f"Unknown whisper backend: {backend}")
+    endpoint, model = resolve_endpoint(backend)
+    response = _post_whisper(endpoint, api_key, model, audio_path)
     return _segments_from_response(response)
 
 

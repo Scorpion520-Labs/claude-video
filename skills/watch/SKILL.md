@@ -1,7 +1,7 @@
 ---
 name: watch
-version: "0.2.0"
-description: Watch a video (URL or local path). Downloads with yt-dlp, extracts auto-scaled frames with ffmpeg, pulls the transcript from captions (or Whisper API fallback), and hands the result to Claude so it can answer questions about what's in the video.
+version: "0.2.1"
+description: Use when a user asks to watch, inspect, summarize, answer questions about, or package a video URL/local video, especially when video output should land in an Obsidian or notes vault.
 argument-hint: "<video-url-or-path> [question]"
 allowed-tools: Bash, Read, AskUserQuestion
 homepage: https://github.com/bradautomates/claude-video
@@ -13,7 +13,7 @@ user-invocable: true
 
 # /watch
 
-You don't have a video input; this skill gives you one. A Python script gets captions first, optionally downloads the video, extracts frames as JPEGs (scene-aware, or fast keyframes at `efficient` detail), gets a timestamped transcript (native captions first, then Whisper API as fallback), and prints frame paths. You then `Read` each frame path to see the images and combine them with the transcript to answer the user.
+You don't have a video input; this skill gives you one. A Python script gets captions first, optionally downloads the video, extracts frames as JPEGs (scene-aware, or fast keyframes at `efficient` detail), gets a timestamped transcript (native captions first, then Whisper API as fallback), prints frame paths, and writes the same markdown report to `report.md` in the work directory. You then `Read` each frame path to see the images and combine them with the transcript to answer the user.
 
 ## Resolve `SKILL_DIR` (do this before any command)
 
@@ -190,13 +190,34 @@ If the user asked a specific question, answer it directly citing timestamps. If 
 
 This holds for `transcript` detail too: even with no frames, produce a **summary** like the other modes — do not paste the full transcript into chat. Synthesize structure, key moments, and spoken content with timestamps; quote only the lines that matter. Offer the raw transcript only if the user explicitly asks for it.
 
-**Step 5 — clean up.** The script prints a working directory at the end. If the user isn't going to ask follow-ups about this video, delete it with `rm -rf <dir>`. If they might, leave it in place.
+**Step 5 — clean up or package.** The script prints a working directory at the end and writes `report.md` there. If the user isn't going to ask follow-ups about this video, delete it with `rm -rf <dir>`. If they might, leave it in place. If `WATCH_OUT_DIR` points at a durable vault or notes directory, keep only real source packets and remove failed, empty, synthetic, or test-generated `watch-*` folders before handing work back.
+
+### Obsidian/source-packet packaging
+
+When `WATCH_OUT_DIR` points at an Obsidian/intake vault, or the user asks for output in `Raw/Watch`, do **not** leave the final result as a random `watch-*` cache folder. Before handoff, convert it into a named source packet:
+- root summary note named after the source/topic
+- `transcript.md`
+- `report.md`
+- `screenshots/` for selected readable frames and any contact sheets
+- `frames/` if the full sampled frame set should be preserved
+- `source/` for downloaded video, captions, and metadata
+
+The root note is the reader-facing artifact. Model it on a processed research guide, not a media dump:
+- Start with frontmatter, a short "What this is" block, and a TL;DR.
+- Write timestamped walkthrough sections that align transcript claims with visual evidence.
+- Copy the best representative frames into `screenshots/` with descriptive timestamped names such as `03_unifi-camera-import_11-32.jpg`.
+- Place those screenshots inline under the exact section/timestamp they support. Inline timestamped frames are the primary visual reference.
+- Keep contact sheets only as a `Visual Appendix` or audit material. Do not make contact sheets the primary reading path.
+- Use relative image links so Obsidian can render the packet after it moves.
+
+If the packet is moved after generation, rewrite stale paths in `report.md` so they point at the final packet location. If the vault has an intake lifecycle, move completed packets to its processed/archive area after durable notes are written. Follow the vault's governance rules for index/log updates.
 
 ## Detail and frames
 
 Default behavior comes from `~/.config/watch/.env`:
 
 - `WATCH_DETAIL=transcript|efficient|balanced|token-burner` (default: `balanced`)
+- `WATCH_OUT_DIR=/path/to/parent` (optional). When set, `/watch` creates each run in a fresh `watch-*` subdirectory under that parent instead of the system temp dir. An explicit `--out-dir` still wins.
 
 At `transcript` detail, captions are enough to return a report without downloading video. If captions are missing, the script downloads audio only and tries Whisper. If no transcript can be produced, it reports the limitation clearly; re-run with `--detail balanced` for frames.
 

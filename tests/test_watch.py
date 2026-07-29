@@ -4,22 +4,31 @@ from __future__ import annotations
 import os
 import subprocess
 import sys
+import tempfile
 from pathlib import Path
 
 WATCH = Path(__file__).resolve().parent.parent / "skills" / "watch" / "scripts" / "watch.py"
 
 
 def _run(clip: Path, *args: str, env_extra: dict | None = None) -> str:
+    proc = _run_proc(clip, *args, env_extra=env_extra)
+    return proc.stdout
+
+
+def _run_proc(clip: Path, *args: str, env_extra: dict | None = None) -> subprocess.CompletedProcess[str]:
     env = dict(os.environ)
     env.pop("WATCH_DETAIL", None)
-    if env_extra:
-        env.update(env_extra)
-    proc = subprocess.run(
-        [sys.executable, str(WATCH), str(clip), "--no-whisper", *args],
-        capture_output=True, text=True, env=env,
-    )
+    env.pop("WATCH_OUT_DIR", None)
+    with tempfile.TemporaryDirectory(prefix="watch-test-home-") as home:
+        env["HOME"] = home
+        if env_extra:
+            env.update(env_extra)
+        proc = subprocess.run(
+            [sys.executable, str(WATCH), str(clip), "--no-whisper", *args],
+            capture_output=True, text=True, env=env,
+        )
     assert proc.returncode == 0, proc.stderr
-    return proc.stdout
+    return proc
 
 
 def test_efficient_uses_keyframe_engine(cut_clip: Path):
@@ -54,6 +63,39 @@ def test_default_is_balanced(cut_clip: Path):
     out = _run(cut_clip)  # no flag, WATCH_DETAIL cleared
     assert "**Detail:** balanced" in out
     assert "(scene" in out
+
+
+def test_watch_out_dir_env_creates_run_directory(cut_clip: Path, tmp_path: Path):
+    base = tmp_path / "watch-runs"
+    proc = _run_proc(cut_clip, "--detail", "transcript", env_extra={"WATCH_OUT_DIR": str(base)})
+    marker = "[watch] working dir: "
+    line = next(line for line in proc.stderr.splitlines() if line.startswith(marker))
+    work_dir = Path(line.removeprefix(marker))
+    assert work_dir.parent == base
+    assert work_dir.name.startswith("watch-")
+    assert work_dir.exists()
+
+
+def test_out_dir_flag_overrides_watch_out_dir_env(cut_clip: Path, tmp_path: Path):
+    explicit = tmp_path / "explicit"
+    proc = _run_proc(
+        cut_clip,
+        "--detail",
+        "transcript",
+        "--out-dir",
+        str(explicit),
+        env_extra={"WATCH_OUT_DIR": str(tmp_path / "ignored")},
+    )
+    assert f"[watch] working dir: {explicit.resolve()}" in proc.stderr
+
+
+def test_report_is_written_to_work_dir(cut_clip: Path, tmp_path: Path):
+    explicit = tmp_path / "watch-run"
+    out = _run(cut_clip, "--detail", "transcript", "--out-dir", str(explicit))
+    report = explicit / "report.md"
+    assert report.exists()
+    assert report.read_text(encoding="utf-8") == out
+    assert "# watch: video report" in out
 
 
 def test_timestamps_add_cue_frames_to_detail(cut_clip: Path):

@@ -56,8 +56,13 @@ def get_config() -> dict[str, object]:
     if detail not in DETAILS:
         detail = DEFAULT_DETAIL
 
+    out_dir = os.environ.get("WATCH_OUT_DIR") or file_values.get("WATCH_OUT_DIR") or None
+    if isinstance(out_dir, str):
+        out_dir = out_dir.strip() or None
+
     return {
         "detail": detail,
+        "out_dir": out_dir,
         "config_file": str(CONFIG_FILE),
     }
 

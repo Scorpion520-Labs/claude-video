@@ -56,6 +56,10 @@ OPENAI_API_KEY=
 # Allowed values: transcript | efficient | balanced | token-burner
 # Keep the value on its own line with no trailing comment.
 # WATCH_DETAIL=balanced
+
+# Optional: store each run under this parent directory instead of the system temp dir.
+# /watch creates a fresh watch-* subdirectory inside it for every run.
+# WATCH_OUT_DIR=
 """
 
 
@@ -114,6 +118,10 @@ def _read_env_key(name: str) -> str | None:
 
 
 def _have_api_key() -> tuple[bool, str | None]:
+    # A configured local / self-hosted endpoint satisfies transcription without
+    # any paid key (omlx, whisper.cpp server, speaches, …).
+    if _read_env_key("WHISPER_BASE_URL"):
+        return True, "local"
     if _read_env_key("GROQ_API_KEY"):
         return True, "groq"
     if _read_env_key("OPENAI_API_KEY"):

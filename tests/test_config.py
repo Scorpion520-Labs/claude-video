@@ -24,9 +24,16 @@ def test_invalid_detail_falls_back_to_default(monkeypatch, tmp_path):
 
 def test_get_config_keys(monkeypatch, tmp_path):
     monkeypatch.delenv("WATCH_DETAIL", raising=False)
+    monkeypatch.delenv("WATCH_OUT_DIR", raising=False)
     monkeypatch.setattr(config, "CONFIG_FILE", tmp_path / "missing.env")
     cfg = config.get_config()
-    assert set(cfg) == {"detail", "config_file"}
+    assert set(cfg) == {"detail", "out_dir", "config_file"}
+
+
+def test_env_out_dir_is_expanded(monkeypatch, tmp_path):
+    monkeypatch.setenv("WATCH_OUT_DIR", str(tmp_path / "watch-output"))
+    monkeypatch.setattr(config, "CONFIG_FILE", tmp_path / "missing.env")
+    assert config.get_config()["out_dir"] == str(tmp_path / "watch-output")
 
 
 def test_frame_cap_mapping():
